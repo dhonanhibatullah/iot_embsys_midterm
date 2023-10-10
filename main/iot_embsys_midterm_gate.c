@@ -40,6 +40,7 @@ void iotem_gate_begin() {
 
 
 void iotem_gate_open() {
+    /* Open gate with given duty */
     ledc_set_duty(LEDC_HIGH_SPEED_MODE, IOTEM_GATE_PWM_CHANNEL, IOTEM_GATE_PWM_OPEN);
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, IOTEM_GATE_PWM_CHANNEL);
 }
@@ -48,6 +49,7 @@ void iotem_gate_open() {
 
 
 void iotem_gate_close() {
+    /* Close gate with given duty */
     ledc_set_duty(LEDC_HIGH_SPEED_MODE, IOTEM_GATE_PWM_CHANNEL, IOTEM_GATE_PWM_CLOSE);
     ledc_update_duty(LEDC_HIGH_SPEED_MODE, IOTEM_GATE_PWM_CHANNEL);
 }

@@ -43,7 +43,8 @@
 
 
 extern QueueHandle_t        password_queue;
-extern SemaphoreHandle_t    auth_mutex;
+extern SemaphoreHandle_t    auth_mutex,
+                            password_mutex;
 extern uint8_t              auth_status;
 extern char                 password[IOTEM_KEYPAD_PASSWORD_MAX_LEN + 1];
 

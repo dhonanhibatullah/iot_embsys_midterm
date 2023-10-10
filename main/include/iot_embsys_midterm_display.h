@@ -17,12 +17,19 @@
 #define IOTEM_DISPLAY_ACCESS_DENIED     3
 #define IOTEM_DISPLAY_CHANGE_PASSWORD   4
 
-#define IOTEM_DISPLAY_TASK_DELAY_MS     50
-#define IOTEM_DISPLAY_SPLASH_SCREEN_MS  2000
+#define IOTEM_DISPLAY_TASK_DELAY_MS             50
+#define IOTEM_DISPLAY_SPLASH_SCREEN_MS          2000
+#define IOTEM_DISPLAY_ACCESS_DENIED_MS          2000
+#define IOTEM_DISPLAY_PASSWORD_QUEUE_TIMEOUT_MS 500   
+
+#define IOTEM_DISPLAY_CHANGE_PASSWORD_YET   0
+#define IOTEM_DISPLAY_CHANGE_PASSWORD_REQ   1
 
 
 /* SSD1306_t somehow need to be defined as a global variable to work in a task. */
-extern SSD1306_t    display;
+extern SSD1306_t            display;
+extern SemaphoreHandle_t    change_password_mutex;
+extern uint8_t              change_password_req;
 
 
 void iotem_display_begin(SSD1306_t* _display);

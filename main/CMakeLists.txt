@@ -4,6 +4,7 @@ idf_component_register(
         "iot_embsys_midterm_display.c"
         "iot_embsys_midterm_keypad.c"
         "iot_embsys_midterm_gate.c"
+        "iot_embsys_midterm_uart.c"
         "iot_embsys_midterm_tasks.c"
     INCLUDE_DIRS 
         "."

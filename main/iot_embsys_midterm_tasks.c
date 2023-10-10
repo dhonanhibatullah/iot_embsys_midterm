@@ -1,6 +1,7 @@
 #include "include/iot_embsys_midterm_display.h"
 #include "include/iot_embsys_midterm_keypad.h"
 #include "include/iot_embsys_midterm_gate.h"
+#include "include/iot_embsys_midterm_uart.h"
 
 
 
@@ -10,9 +11,14 @@ SSD1306_t           display;
 
 QueueHandle_t       password_queue;
 
-SemaphoreHandle_t   auth_mutex;
+SemaphoreHandle_t   auth_mutex,
+                    gate_mutex,
+                    password_mutex,
+                    change_password_mutex;
 
-uint8_t             auth_status = IOTEM_KEYPAD_AUTH_IDLE;
+uint8_t             auth_status = IOTEM_KEYPAD_AUTH_IDLE,
+                    gate_status = IOTEM_GATE_CLOSED,
+                    change_password_req = IOTEM_DISPLAY_CHANGE_PASSWORD_YET;
 
 char                password[IOTEM_KEYPAD_PASSWORD_MAX_LEN + 1] = "12345678\0";
 
@@ -26,8 +32,13 @@ void iotem_display_task(void* pvParameters) {
     bool    need_clear = true;
     char    password_buff[IOTEM_KEYPAD_PASSWORD_MAX_LEN + 1] = {0};
 
+
     /* Begin display */
     iotem_display_begin(&display);
+
+
+    /* Create change password mutex */
+    change_password_mutex = xSemaphoreCreateMutex();
 
 
     /* Loop */
@@ -57,6 +68,15 @@ void iotem_display_task(void* pvParameters) {
 
 
             case IOTEM_DISPLAY_PASSWORD:
+                /* Check for password change request */
+                xSemaphoreTake(change_password_mutex, portMAX_DELAY);
+                if(change_password_req == IOTEM_DISPLAY_CHANGE_PASSWORD_REQ) {
+                    task_state = IOTEM_DISPLAY_CHANGE_PASSWORD;
+                    need_clear = true;
+                }
+                xSemaphoreGive(change_password_mutex);
+
+                /* Check for authentification */
                 xSemaphoreTake(auth_mutex, portMAX_DELAY);
                 switch(auth_status) {
                     
@@ -64,23 +84,27 @@ void iotem_display_task(void* pvParameters) {
                         break;
 
                     case IOTEM_KEYPAD_AUTH_SUCCESS:
+                        auth_status = IOTEM_KEYPAD_AUTH_IDLE;
                         task_state  = IOTEM_DISPLAY_ACCESS_GRANTED;
                         need_clear  = true;
-                        auth_status = IOTEM_KEYPAD_AUTH_IDLE; 
+                        xSemaphoreTake(gate_mutex, portMAX_DELAY);
+                        gate_status = IOTEM_GATE_OPENED;
+                        xSemaphoreGive(gate_mutex);
                         break;
 
                     case IOTEM_KEYPAD_AUTH_FAILED:
+                        auth_status = IOTEM_KEYPAD_AUTH_IDLE;
                         task_state  = IOTEM_DISPLAY_ACCESS_DENIED;
                         need_clear  = true;
-                        auth_status = IOTEM_KEYPAD_AUTH_IDLE;
                         break;
                 }
                 xSemaphoreGive(auth_mutex);
+                if(task_state != IOTEM_DISPLAY_PASSWORD) break;
 
                 ssd1306_display_text(&display, 0, "                ", 16, true);
                 ssd1306_display_text(&display, 1, "Insert Password:", 16, true);
                 ssd1306_display_text(&display, 2, "                ", 16, true);
-                xQueueReceive(password_queue, &password_buff, portMAX_DELAY);
+                xQueueReceive(password_queue, &password_buff, pdMS_TO_TICKS(IOTEM_DISPLAY_PASSWORD_QUEUE_TIMEOUT_MS));
                 ssd1306_display_text(&display, 5, password_buff, 16, false);
                 break;
 
@@ -89,6 +113,13 @@ void iotem_display_task(void* pvParameters) {
                 ssd1306_display_text(&display, 2, "                ", 16, true);
                 ssd1306_display_text(&display, 3, " ACCESS GRANTED!", 16, true);
                 ssd1306_display_text(&display, 4, "                ", 16, true);
+
+                xSemaphoreTake(gate_mutex, portMAX_DELAY);
+                if(gate_status == IOTEM_GATE_CLOSED) {
+                    task_state = IOTEM_DISPLAY_PASSWORD;
+                    need_clear = true;
+                }
+                xSemaphoreGive(gate_mutex);
                 break;
 
 
@@ -96,10 +127,22 @@ void iotem_display_task(void* pvParameters) {
                 ssd1306_display_text(&display, 2, "                ", 16, true);
                 ssd1306_display_text(&display, 3, " ACCESS DENIED! ", 16, true);
                 ssd1306_display_text(&display, 4, "                ", 16, true);
+                vTaskDelay(pdMS_TO_TICKS(IOTEM_DISPLAY_ACCESS_DENIED_MS));
+                task_state = IOTEM_DISPLAY_PASSWORD;
+                need_clear = true;
                 break;
 
 
             case IOTEM_DISPLAY_CHANGE_PASSWORD:
+                ssd1306_display_text(&display, 2, "                ", 16, true);
+                ssd1306_display_text(&display, 3, " PASSWORD CHANGE", 16, true);
+                ssd1306_display_text(&display, 4, "                ", 16, true);
+                xSemaphoreTake(change_password_mutex, portMAX_DELAY);
+                if(change_password_req == IOTEM_DISPLAY_CHANGE_PASSWORD_YET) {
+                    task_state = IOTEM_DISPLAY_PASSWORD;
+                    need_clear = true;
+                }
+                xSemaphoreGive(change_password_mutex);
                 break;
 
 
@@ -120,16 +163,17 @@ void iotem_keypad_task(void* pvParameters) {
 
     /* Local variables */
     char    password_buff[IOTEM_KEYPAD_PASSWORD_MAX_LEN + 1]   = {0};
-    uint8_t password_cursor     = 0;
+    uint8_t password_cursor = 0;
 
 
     /* Begin keypad */
     iotem_keypad_begin();
 
     
-    /* Begin password queue handler and auth semaphore handler */
+    /* Begin password queue handler and semaphore handlers */
     password_queue  = xQueueCreate(IOTEM_KEYPAD_PASSWORD_QUEUE_SIZE, sizeof(char[IOTEM_KEYPAD_PASSWORD_MAX_LEN + 1]));
     auth_mutex      = xSemaphoreCreateMutex();
+    password_mutex  = xSemaphoreCreateMutex();
 
 
     /* Loop */
@@ -206,6 +250,7 @@ void iotem_keypad_task(void* pvParameters) {
                         break;
                     case IOTEM_KEYPAD_HASH:
                         if(password_cursor != 0) {
+                            xSemaphoreTake(password_mutex, portMAX_DELAY);
                             if(iotem_keypad_auth(password_buff, password)) {
                                 xSemaphoreTake(auth_mutex, portMAX_DELAY);
                                 auth_status = IOTEM_KEYPAD_AUTH_SUCCESS;
@@ -216,7 +261,13 @@ void iotem_keypad_task(void* pvParameters) {
                                 auth_status = IOTEM_KEYPAD_AUTH_FAILED;
                                 xSemaphoreGive(auth_mutex);
                             }
-                            password_buff[0] = '\0';
+                            xSemaphoreGive(password_mutex);
+
+                            /* Password buffer reset */
+                            for(uint8_t i = 0; i < IOTEM_KEYPAD_PASSWORD_MAX_LEN; ++i) {
+                                password_buff[i] = '\0';
+                            }
+                            password_cursor = 0;
                         }
                         break;
                     default:
@@ -232,6 +283,7 @@ void iotem_keypad_task(void* pvParameters) {
                         password_buff[password_cursor] = '\0';
                         break;
                     case IOTEM_KEYPAD_HASH:
+                        xSemaphoreTake(password_mutex, portMAX_DELAY);
                         if(iotem_keypad_auth(password_buff, password)) {
                             xSemaphoreTake(auth_mutex, portMAX_DELAY);
                             auth_status = IOTEM_KEYPAD_AUTH_SUCCESS;
@@ -242,7 +294,13 @@ void iotem_keypad_task(void* pvParameters) {
                             auth_status = IOTEM_KEYPAD_AUTH_FAILED;
                             xSemaphoreGive(auth_mutex);
                         }
-                        password_buff[0] = '\0';
+                        xSemaphoreGive(password_mutex);
+
+                        /* Password buffer reset */
+                        for(uint8_t i = 0; i < IOTEM_KEYPAD_PASSWORD_MAX_LEN; ++i) {
+                            password_buff[i] = '\0';
+                        }
+                        password_cursor = 0;
                         break;
                     default:
                         break;
@@ -266,20 +324,116 @@ void iotem_keypad_task(void* pvParameters) {
 void iotem_gate_task(void* pvParameters) {
 
     /* Local variables */
+    uint8_t gate_cmd    = IOTEM_GATE_CLOSED;
 
-
+    
     /* Begin gate components */
     iotem_gate_begin();
 
 
+    /* Begin gate mutex */
+    gate_mutex = xSemaphoreCreateMutex();
+
+
     /* Loop */
     while(true) {
-        iotem_gate_open();
-        vTaskDelay(pdMS_TO_TICKS(1500));
-        iotem_gate_close();
-        vTaskDelay(pdMS_TO_TICKS(1500));
+
+        /* Receive gate status via mutex */
+        xSemaphoreTake(gate_mutex, portMAX_DELAY);
+        gate_cmd = gate_status;
+        xSemaphoreGive(gate_mutex);
+
+
+        /* Open if gate open command received */
+        if(gate_cmd == IOTEM_GATE_OPENED) {
+
+            /* Open gate */
+            iotem_gate_open();
+
+            
+            /* Check whether the user has passed the gate or not via distance sensor */
+            while(iotem_gate_get_pass() == IOTEM_GATE_NOT_PASSED) {
+                vTaskDelay(pdMS_TO_TICKS(IOTEM_GATE_PASS_DELAY_MS));
+            }
+
+
+            /* Close gate */
+            iotem_gate_close();
+
+
+            /* Reset */
+            xSemaphoreTake(gate_mutex, portMAX_DELAY);
+            gate_status = IOTEM_GATE_CLOSED;
+            xSemaphoreGive(gate_mutex);
+        }
+
+
+        /* Delay */
+        vTaskDelay(pdMS_TO_TICKS(IOTEM_GATE_TASK_DELAY_MS));
     }
 }
 
 
 
+
+void iotem_uart_task(void* pvParameters) {
+
+    /* Local variables */
+    char buf[128];
+    uint8_t task_state = IOTEM_PASSWORD_IDLE;
+
+
+    /* Begin UART communication */
+    iotem_uart_begin();
+
+
+    /* Loop */
+    while(true) {
+
+        /* Read UART */
+        int len = uart_read_bytes(UART_NUM_0, buf, sizeof(buf), pdMS_TO_TICKS(IOTEM_UART_DELAY_MS));
+
+
+        /* If UART buffer detected */
+        if(len > 0) {
+            /* Null terminate the last and before the last entry (clear whitespaces) */
+            buf[len]        = '\0';
+            buf[len - 1]    = '\0';
+            
+            
+            switch(task_state) {
+                
+                case IOTEM_PASSWORD_IDLE: 
+                    /* Change password can be done iff the input is the same as current password */
+                    if(strcmp(buf, password) == 0) {
+                        xSemaphoreTake(change_password_mutex, portMAX_DELAY);
+                        change_password_req = IOTEM_DISPLAY_CHANGE_PASSWORD_REQ;
+                        xSemaphoreGive(change_password_mutex);
+
+                        printf("Insert new password (1-9 and capital A-D only):\n");
+                        task_state = IOTEM_PASSWORD_CHANGE;
+                    }
+                    break;
+
+                case IOTEM_PASSWORD_CHANGE:
+                    xSemaphoreTake(password_mutex, portMAX_DELAY);
+                    for(uint8_t i = 0; i < IOTEM_KEYPAD_PASSWORD_MAX_LEN; ++i) {
+                        password[i] = buf[i];
+                    }
+                    xSemaphoreGive(password_mutex);
+                    
+                    xSemaphoreTake(change_password_mutex, portMAX_DELAY);
+                    change_password_req = IOTEM_DISPLAY_CHANGE_PASSWORD_YET;
+                    xSemaphoreGive(change_password_mutex);
+
+                    printf("Password changed successfully!\n");
+
+                    task_state = IOTEM_PASSWORD_IDLE;
+            }
+        }
+
+
+        /* Delay */
+        vTaskDelay(pdMS_TO_TICKS(IOTEM_UART_TASK_DELAY_MS));
+    }
+}

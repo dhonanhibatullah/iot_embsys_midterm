@@ -1,11 +1,20 @@
 #include "include/iot_embsys_midterm_display.h"
 #include "include/iot_embsys_midterm_keypad.h"
 #include "include/iot_embsys_midterm_gate.h"
-// #include "include/iot_embsys_midterm_uart.h"
+#include "include/iot_embsys_midterm_uart.h"
 
 
 
 void app_begin() {
+    xTaskCreate(
+        iotem_uart_task,
+        "UART Task",
+        4096,
+        NULL,
+        2,
+        NULL
+    );
+
     xTaskCreate(
         iotem_display_task,
         "Display Task",
@@ -18,7 +27,7 @@ void app_begin() {
     xTaskCreate(
         iotem_keypad_task,
         "Keypad Task",
-        2048,
+        4096,
         NULL,
         1,
         NULL
